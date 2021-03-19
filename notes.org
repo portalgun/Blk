@@ -1,0 +1,42 @@
+* cmpIndTable
+
+
+* lvlIndTable
+subInd
+lvlInd
+stdInd
+cmpInd
+nlvl*ncmp [125]
+{'lvlInd'}    {'cmpInd'}
+[stdInd cmpInd]
+
+* blkTable
+nTrl [130000]
+  {'mode'}    {'lvlInd'}    {'cmpInd'}    {'blk'}    {'trl'}    {'intrvl'}    {'cmpNum'}    {'P'}
+
+lvlInd - which unique standard lvl index
+cmpInd - which unique comparison lvl index
+cmpNum - which cmp/std in the interval
+* optsTable
+nlvl*ncmp  [125]
+
+
+
+{'disparity} {nx1}{1xnCmp+1}
+{'bins}      {nx1}{1xnCmp+1}
+{'speed'}
+{'rmsFix'}
+{'dcFix'}
+{'dnkFix'}
+{'trgtDispOrWin'}
+{'trgtPosXYZm'} 
+{'focDispOrWin'}
+{'focPosXYZm'}
+{'stmPosXYZm'}    
+{'stmXYdeg'}    
+{'wdwType'}    
+{'wdwPszRCT'}
+{'wdwPszRCT'}
+{'wdwRmpDm'}
+{'wdwDskDm'}
+{'wdwSymInd'}
