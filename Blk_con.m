@@ -59,7 +59,7 @@ methods(Access = ?Blk)
         obj.parse_ptchsOpts_(ptchsOpts);
 
         obj.get_opts_tables_();
-        obj.get_lvlInd_table_();
+        obj.get_lvlInd_tables_();
         obj.get_blk_table_();
         obj.save();
     end
@@ -114,7 +114,7 @@ methods(Access=protected)
 
 
     end
-    function obj=get_lvlInd_table_(obj)
+    function obj=get_lvlInd_tables_(obj)
         [~,~,stdInd]=unique(obj.stdRC,'rows');
         [~,~,cmpInd]=unique(obj.cmpRC,'rows');
 
@@ -126,6 +126,8 @@ methods(Access=protected)
 
         obj.cndLookup=[transpose(1:length(stdInd)),stdInd,cmpInd];
         obj.cndKey={'cndInd','lvlInd','cmpInd'};
+
+
     end
     function obj=get_blk_table_(obj)
         b=obj.blkOpts;
@@ -182,34 +184,40 @@ methods(Access=protected)
         nIntrvlAll=nTrl*b.nIntrvlPerTrl;
         nIntrvlPerBin=nIntrvlAll/numel(bins);
 
-        for i = 1:length(mirror)
-            m=mirror{i};
+        binCol=obj.get_block_column('bins');
+        %nIntrvlPerBin 27000
+        mr=[mirror repeats];
+        for i = 1:length(mr)
+            m=mr{i};
             switch m
             case 'lvlInd'
                 nIntrvlPerBin=nIntrvlPerBin/nLvl;
             case obj.dims
                 ind=ismember(obj.dims,m);
                 nIntrvlPerBin=nIntrvlPerBin/obj.nLvlPerDim(ind);
-                % XXX
+            case 'mode'
+                nIntrvlPerBin=nIntrvlPerBin/nModes;
             otherwise obj.dims
-                error(['Unhandled mirror case: ' m ]);
+                error(['Unhandled repeat or mirror case: ' m ]);
             end
         end
+        % nIntrvlPerBin1 1800
 
         obj.selInd=zeros(nIntrvlAll,1);
         for i = 1:length(bins)
-            obj=bin_table_fun(obj,bins(i),binVals,repeats,mirror,nIntrvlPerBin);
+            binBind=binCol==i; % Available to set
+            obj=bin_table_fun(obj,bins(i),binVals,binBind,repeats,mirror,nIntrvlPerBin);
         end
 
-        function obj=bin_table_fun(obj,bin,binVals,repeats,mirror,nIntrvlPerBin)
+        function obj=bin_table_fun(obj,bin,binVals,binBind,repeats,mirror,nIntrvlPerBin)
 
             % TODO
             % bins
             % and/or?
 
 
-            binInd=find(ismember(binVals,bin));
-            nStm=numel(binInd);
+            binInd=find(ismember(binVals,bin)); %Available to SAMPLE FROM
+            nStm=numel(binInd); % 7008
 
             bReplace=false;
             if nStm < nIntrvlPerBin
@@ -218,34 +226,34 @@ methods(Access=protected)
             end
 
             if isempty(repeats)
-                nUnq=1;
-                uInds=ones(nIntrvlPerBin,1);
+                nUnqRep=1;
+                uIndsRep=ones(nIntrvlPerBin,1);
             else
                 col=obj.get_block_column(repeats);
-                [~,~,uInds]=unique(col(binInd),'rows');
-                nUnq=(max(uInds));
-            end
-
-            rng(b.sd);
-            for i = 1:nUnq
-                ind=(uInds==i);
-                K=sum(ind);
-                obj.selInd(ind)=datasample(binInd,K,'Replace',bReplace);
+                [~,~,uIndsRep]=unique(col,'rows');
+                nUnqRep=(max(uIndsRep));
             end
 
             if isempty(mirror)
-                return
+                nUnqMir=1;
+                uIndsRep=ones(nIntrvlPerBin,1);
             else
                 col=obj.get_block_column(mirror);
-                [~,~,uInds]=unique(col,'rows');
-                nUnq=(max(uInds));
+                [~,~,uIndsMir]=unique(col,'rows');
+                nUnqMir=(max(uIndsMir));
             end
 
-            copyInd=(uInds==1);
-            for i = 2:nUnq
-                ind=(uInds==i);
-                K=sum(ind);
-                obj.selInd(ind)=obj.selInd(copyInd);
+            indsAll=false(size(binBind));
+            for i = 1:nUnqRep
+                ind=(uIndsRep==i) & (uIndsMir==1) & binBind;
+                indsAll=indsAll | ind;
+                obj.selInd(ind)=datasample(binInd,nIntrvlPerBin,'Replace',bReplace);
+            end
+
+            for i = 2:nUnqMir
+                ind=(uIndsMir==i) & binBind;
+                %K=sum(ind);
+                obj.selInd(ind)=obj.selInd(indsAll);
             end
         end
     end
@@ -353,7 +361,7 @@ methods(Static)
                 elseif sz(1) ~=3 && sz(2) ~=3
                     error([ fld ' second dimension must be size 3']);
                 end
-            elseif endsWith(fld,'XYdeg')
+            elseif endsWith(fld,'XYdeg') || strcmp(fld,'wdwSYmINd')
                 if sz(1) == 2 && sz(2) ~= 2
                     val=transpose(val);
                 elseif sz(1) ~=2 && sz(2) ~=2

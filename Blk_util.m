@@ -22,6 +22,9 @@ methods
 %% UTIL
     % XXX MOVE TO CON
     function col=get_block_column(obj,key)
+        if ~iscell(key)
+            key={key};
+        end
         gd=ismember(key,obj.blkKey);
         if all(gd)
             ind=ismember(obj.blkKey,key);
@@ -35,9 +38,6 @@ methods
         col(:,~gd)=obj.get_block_column_dim_lvl(key(~gd));
     end
     function col=get_block_column_dim_lvl(obj,name)
-        if ~iscell(name)
-            name={name};
-        end
         col=zeros(size(obj.blkTable,1), numel(name));
         for i = 1:length(name)
             d=find(ismember(obj.dims,name{i}));
@@ -81,10 +81,10 @@ methods
 
     %% IND2RC
     function RC=lvlInd_to_lvlRC(obj,ind)
-        RC=[obj.lvlLookup(ind,3)];
+        RC=[obj.lvlLookup(ind,2:3)];
     end
     function RC=cmpInd_to_cmpRC(obj,ind)
-        RC=[obj.cmpLookup(ind,2)];
+        RC=[obj.cmpLookup(ind,2:3)];
     end
 end
 methods(Static)
@@ -123,7 +123,7 @@ methods(Static)
     function [t,dims]=load_lookup(alias)
         dire=Blk.get_dir(alias);
         S=load([dire 'lookup.mat']);
-        dims=S.dims;
+        dims=S.lookup.dims;
         t=Blk.lookup_to_tables(S.lookup);
     end
     function opts=load_opts_raw(alias)

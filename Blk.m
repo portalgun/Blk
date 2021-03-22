@@ -36,6 +36,7 @@ methods
         %new.opts.table
     end
     function S=ret_opts_struct(obj)
+        % EG ptchs.ptchOpts
         S=struct;
         n=length(obj.opts.key);
         bExpand=false(n,1);
@@ -81,15 +82,82 @@ methods
         ind=ismember(obj.opts.key,key);
         col=obj.opts.table(:,ind);
     end
+    function S=ret_blk_struct(obj)
+    % EG expTracker
+        S=struct();
+
+        %numel(obj.blk.unique('cndInd')) % 125
+        S.nStd=numel(obj.blk.unique('lvlInd'));  % 25 | 5
+        S.nCmp=numel(obj.blk.unique('cmpInd'));  % 5  | 9
+        S.nBlk=numel(obj.blk.unique('blk'));     % 5  | 5
+        S.nTrl=[];
+        S.nTrlPerBlk=numel(obj.blk.unique('trl'));     %   | 900
+        S.nTrl=S.nTrlPerBlk*S.nBlk;
+        S.nTrlPerLvl=S.nTrl/S.nCmp; % cmp is lvl?
+        S.Xname=obj.dims;
+
+        S.methodVars=obj.get_method_vars();
+
+    end
+    function m=get_method_vars(obj)
+        m=struct();
+        [m.stdXunqAll,m.cmpXunqAll]=get_stds_cmps_unq();
+        m.minDist=[];
+
+        %obj.blk
+
+    end
+    function [stds,cmps]=get_stds_cmps_unq(obj)
+        Cnds=obj.lookup.cnd.ret();
+        Lvls=obj.lookup.lvl.ret();
+        Cmps=obj.lookup.cmp.ret();
+
+        stds=cell(length(obj.dims),1);
+        cmps=cell(length(obj.dims),1);
+        inds=zeros(length(obj.dims),1);
+        for i = 1:length(obj.dims)
+            dim=obj.dims{i};
+            nStd=numel(unique(Lvls(:,i+1)));
+            nCmp=numel(unique(Cmps(:,i+1)));
+            stds{i}=cell(nStd,nCmp);
+            cmps{i}=cell(nStd,nCmp);
+            inds(i)=find(ismember(obj.opts.key,obj.dims{i}));
+        end
+        for i = 1:size(Cnds,1)
+            lvlInd=Cnds(i,2);
+            cmpInd=Cnds(i,3);
+            lvlRC=Lvls(lvlInd,2:end);
+            cmpRC=Cmps(cmpInd,2:end);
+
+            r=obj.opts.table(i,:);
+            for j = 1:length(obj.dims)
+                dim=obj.dims{j};
+                v=r{inds(j)};
+
+                stds{j}( lvlRC(j), cmpRC(j) ) =v(1);
+                cmps{j}( lvlRC(j), cmpRC(j) ) =v(2:end);
+            end
+        end
+        for i = 1:length(obj.dims)
+            dim=obj.dims{i};
+            if all(cellfun(@isnumeric,stds{i}))
+                stds{i}=cell2mat(stds{i});
+                if isuniform(stds{i},2)
+                    stds{i}=stds{i}(:,1);
+                end
+            end
+            if all(cellfun(@isnumeric,cmps{i}))
+                cmps{i}=cell2mat(cmps{i});
+            end
+        end
+
+    end
+    function cmps=get_cmp_unq(obj)
+        cmps=obj.lookup.cmp(:,2:end);
+    end
 end
 methods(Access=private)
     function S=expand_fun_dims(obj,S,fldsD)
-        if ~isfield(S,'std')
-            S.std=struct();
-        end
-        if ~isfield(S,'cmp')
-            S.cmp=struct();
-        end
         % cmpnum
         cmpNum=obj.blk('cmpNum').ret()+1;
         for i = 1:length(fldsD)
@@ -103,12 +171,6 @@ methods(Access=private)
         end
     end
     function S=expand_fun_dims_long(obj,S,fldsDL)
-        if ~isfield(S,'std')
-            S.std=struct();
-        end
-        if ~isfield(S,'cmp')
-            S.cmp=struct();
-        end
         % cndInd
         cmpNum=obj.blk('cmpNum').ret()+1;
         cndInd=obj.blk('cndInd').ret();
