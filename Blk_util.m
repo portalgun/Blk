@@ -19,73 +19,9 @@ methods
 
 
     end
-%% UTIL
-    % XXX MOVE TO CON
-    function col=get_block_column(obj,key)
-        if ~iscell(key)
-            key={key};
-        end
-        gd=ismember(key,obj.blkKey);
-        if all(gd)
-            ind=ismember(obj.blkKey,key);
-            col=obj.blkTable(:,ind);
-            return
-        end
-
-        col=zeros(size(obj.blkTable,1), numel(key));
-        ind=ismember(obj.blkKey,key(gd));
-        col(:,gd)=obj.blkTable(:,ind);
-        col(:,~gd)=obj.get_block_column_dim_lvl(key(~gd));
-    end
-    function col=get_block_column_dim_lvl(obj,name)
-        col=zeros(size(obj.blkTable,1), numel(name));
-        for i = 1:length(name)
-            d=find(ismember(obj.dims,name{i}));
-            lvls=obj.get_block_column('lvlInd');
-            a=obj.lvlInd_to_lvlRC(lvls);
-            col(:,i)=a(:,d);
-        end
-    end
-    function col=get_block_column_dim_cmp(obj,name)
-        if ~iscell(name)
-            name={name};
-        end
-        col=zeros(size(obj.blkTable,1), numel(name));
-        for i = 1:length(name)
-            d=find(ismember(obj.dims,name{i}));
-            lvls=obj.get_block_column('lvlInd');
-            a=obj.lvlInd_to_lvlRC(lvls);
-            col(:,i)=a(:,d);
-        end
-    end
-    function col=get_src_column(obj,key)
-        ind=ismember(obj.srcKey,key);
-        col=obj.srcTable(:,ind);
-    end
 %% CONVERSIONS
 
     %% CND
-    function cnd=lvlInd_cmpInd_to_cndInd(obj,lvl,cmp)
-        nStd=size(obj.lvlLookup,1);
-        nCmp=size(obj.cmpLookup,1);
-
-        cnd=sub2ind([nCmp nStd],cmp,lvl);
-
-    end
-    function lvl=cndInd_to_lvlInd(obj,cnd)
-        lvl=[obj.cndLookup(cind,2)];
-    end
-    function cmps=cndInd_to_cmpInd(obj,cnd)
-        cmps=[obj.cndLookup(cind,3)];
-    end
-
-    %% IND2RC
-    function RC=lvlInd_to_lvlRC(obj,ind)
-        RC=[obj.lvlLookup(ind,2:3)];
-    end
-    function RC=cmpInd_to_cmpRC(obj,ind)
-        RC=[obj.cmpLookup(ind,2:3)];
-    end
 end
 methods(Static)
     function [t,dims] = make_lookup_tables(BC)

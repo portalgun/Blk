@@ -69,6 +69,68 @@ methods(Access=protected)
     function obj=load_src_table_(obj)
         [obj.srcTable,obj.srcKey]=imapPch.load_src_table(obj.database,obj.hash);
     end
+    function col=get_src_column(obj,key)
+        ind=ismember(obj.srcKey,key);
+        col=obj.srcTable(:,ind);
+    end
+    function col=get_block_column(obj,key)
+        if ~iscell(key)
+            key={key};
+        end
+        gd=ismember(key,obj.blkKey);
+        if all(gd)
+            ind=ismember(obj.blkKey,key);
+            col=obj.blkTable(:,ind);
+            return
+        end
+
+        col=zeros(size(obj.blkTable,1), numel(key));
+        ind=ismember(obj.blkKey,key(gd));
+        col(:,gd)=obj.blkTable(:,ind);
+        col(:,~gd)=obj.get_block_column_dim_lvl(key(~gd));
+    end
+    function col=get_block_column_dim_lvl(obj,name)
+        col=zeros(size(obj.blkTable,1), numel(name));
+        for i = 1:length(name)
+            d=find(ismember(obj.dims,name{i}));
+            lvls=obj.get_block_column('lvlInd');
+            a=obj.lvlInd_to_lvlRC(lvls);
+            col(:,i)=a(:,d);
+        end
+    end
+    function col=get_block_column_dim_cmp(obj,name)
+        if ~iscell(name)
+            name={name};
+        end
+        col=zeros(size(obj.blkTable,1), numel(name));
+        for i = 1:length(name)
+            d=find(ismember(obj.dims,name{i}));
+            lvls=obj.get_block_column('lvlInd');
+            a=obj.lvlInd_to_lvlRC(lvls);
+            col(:,i)=a(:,d);
+        end
+    end
+    function cnd=lvlInd_cmpInd_to_cndInd(obj,lvl,cmp)
+        nStd=size(obj.lvlLookup,1);
+        nCmp=size(obj.cmpLookup,1);
+
+        cnd=sub2ind([nCmp nStd],cmp,lvl);
+
+    end
+    function lvl=cndInd_to_lvlInd(obj,cnd)
+        lvl=[obj.cndLookup(cind,2)];
+    end
+    function cmps=cndInd_to_cmpInd(obj,cnd)
+        cmps=[obj.cndLookup(cind,3)];
+    end
+
+    %% IND2RC
+    function RC=lvlInd_to_lvlRC(obj,ind)
+        RC=[obj.lvlLookup(ind,2:end)];
+    end
+    function RC=cmpInd_to_cmpRC(obj,ind)
+        RC=[obj.cmpLookup(ind,2:end)];
+    end
 %% PARSE
     function obj=parse_blkOpts_(obj,blkOpts)
         obj.blkOpts=Blk_con.parse_blkOpts(blkOpts);
@@ -85,10 +147,14 @@ methods(Access=protected)
         end
         obj.database=dtb;
 
-        if ~exist('hash','var') || isempty(hash)
-            error('Patches hash required in def-file');
+        if exist('pchAlias','var') && ~isempty(pchAlias)
+            hashes=imapCommon.alias2hashes(pchAlias,obj.database);
+            obj.hash=hashes.pch;
+        elseif exist('hash','var') && ~isempty(hash)
+            obj.hash=hash;
+        else
+            error('Patches hash or alias required in def-file');
         end
-        obj.hash=hash;
 
         blkOpts=struct();
         flds=Blk_con.get_blk_flds();
@@ -176,13 +242,8 @@ methods(Access=protected)
 
         nLvl=prod(obj.nLvlPerDim);
         nModes=numel(b.modes);
-        nBlk=nLvl.*b.nBlkPerLvl; %50
-        nTrlPerBlk=b.nTrlPerLvl./b.nBlkPerLvl; % 180
-        nTrlPerMode=nTrlPerBlk*nBlk;
-        nTrl=nTrlPerMode*nModes;
-        nIntrvlPerMode=nTrlPerMode*b.nIntrvlPerTrl;
-        nIntrvlAll=nTrl*b.nIntrvlPerTrl;
-        nIntrvlPerBin=nIntrvlAll/numel(bins);
+        nBins=numel(bins);
+        [nIntrvlPerBin,nIntrvlAll]=Blk_con.get_nIntrvlPerBin(nBins,nModes,obj.nLvlPerDim,b.nBlkPerLvl,b.nTrlPerLvl,b.nIntrvlPerTrl);
 
         binCol=obj.get_block_column('bins');
         %nIntrvlPerBin 27000
@@ -201,6 +262,7 @@ methods(Access=protected)
                 error(['Unhandled repeat or mirror case: ' m ]);
             end
         end
+        disp(['nIntrvlPerBin ' num2str(nIntrvlPerBin)]);
         % nIntrvlPerBin1 1800
 
         obj.selInd=zeros(nIntrvlAll,1);
@@ -227,7 +289,7 @@ methods(Access=protected)
 
             if isempty(repeats)
                 nUnqRep=1;
-                uIndsRep=ones(nIntrvlPerBin,1);
+                uIndsRep=true(size(binBind));
             else
                 col=obj.get_block_column(repeats);
                 [~,~,uIndsRep]=unique(col,'rows');
@@ -236,7 +298,7 @@ methods(Access=protected)
 
             if isempty(mirror)
                 nUnqMir=1;
-                uIndsRep=ones(nIntrvlPerBin,1);
+                uIndsMir=true(size(binBind));
             else
                 col=obj.get_block_column(mirror);
                 [~,~,uIndsMir]=unique(col,'rows');
@@ -361,7 +423,7 @@ methods(Static)
                 elseif sz(1) ~=3 && sz(2) ~=3
                     error([ fld ' second dimension must be size 3']);
                 end
-            elseif endsWith(fld,'XYdeg') || strcmp(fld,'wdwSYmINd')
+            elseif endsWith(fld,'XYdeg') || strcmp(fld,'wdwSymInd')
                 if sz(1) == 2 && sz(2) ~= 2
                     val=transpose(val);
                 elseif sz(1) ~=2 && sz(2) ~=2
@@ -461,8 +523,24 @@ methods(Static)
         function [stdRC,cmpRC]=get_RC(nCol,nAisle)
         %std{:} cmp{:}
             C=cellfun(@(x) 1:x, num2cell(nCol),UO,false);
+            % every standard combination
+
             A=cellfun(@(x) 1:x, num2cell(nAisle),UO,false);
-            RC=distribute(distribute(C{:}),distribute(A{:}));
+            % every cmp combination
+            if numel(C) == 1
+                C=C{1};
+            else
+                C=distribute(C{:});
+            end
+            if numel(A) == 1
+                A=A{1};
+            else
+                A=distribute(A{:});
+            end
+
+            RC=distribute(C,A);
+            % every combination of standard combinations and cmp combinations
+
             h=size(RC,2)/2;
             stdRC=RC(:,1:h);
             cmpRC=RC(:,h+1:end);
@@ -526,13 +604,24 @@ methods(Static)
             ;'wdwRmpDm',[],''  ...    % 1-3
             ;'wdwDskDm',[],''  ...    % 1-3
             ;'wdwSymInd',[],''  ...   % 1-3
+             ...
+            ;'duration',[],''  ...   % 1-3
 
-     
           };
     end
     function out=parse_blkOpts(Opts)
         P=Blk_con.get_blk_parseOpts();
         out=parse([],Opts,P);
+    end
+    function [nIntrvlPerBin,nIntrvlAll]=get_nIntrvlPerBin(nBins,nModes,nLvlPerDim,nBlkPerLvl,nTrlPerLvl,nIntrvlPerTrl)
+        nLvl=prod(nLvlPerDim);
+        nBlk=nLvl.*nBlkPerLvl; %50
+        nTrlPerBlk=nTrlPerLvl./nBlkPerLvl; % 180
+        nTrlPerMode=nTrlPerBlk*nBlk;
+        nTrl=nTrlPerMode*nModes;
+        nIntrvlPerMode=nTrlPerMode*nIntrvlPerTrl;
+        nIntrvlAll=nTrl*nIntrvlPerTrl;
+        nIntrvlPerBin=nIntrvlAll/nBins;
     end
 end
 end
