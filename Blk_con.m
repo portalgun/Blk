@@ -1,4 +1,4 @@
-classdef Blk_con <handle & Blk_util
+classdef Blk_con <handle
 properties
     defName
     alias
@@ -33,17 +33,24 @@ properties
     %
     dims
     nDim
-    nCmpPerLvl
+    nCmpPerDim
     nLvlPerDim
 end
 properties(Hidden)
     stdRC
     cmpRC
+    replaceBind
 end
 methods(Access = ?Blk)
-    function obj=Blk_con(defName)
+    function obj=Blk_con(defName,replaceBind,bSave)
         if ~startsWith(defName,'D_exp_')
             defName=['D_blk_' defName];
+        end
+        if exist('replaceBind','var') && ~isempty(replaceBind)
+            obj.replaceBind=replaceBind;
+        end
+        if ~exist('bSave','var') || isempty(bSave)
+            bSave=1;
         end
         fname=which(defName);
         if isempty(fname)
@@ -61,7 +68,58 @@ methods(Access = ?Blk)
         obj.get_opts_tables_();
         obj.get_lvlInd_tables_();
         obj.get_blk_table_();
+        if bSave && ~isempty(obj.replaceBind)
+            obj.move();
+        end
         obj.save();
+    end
+    function obj=move(obj)
+        dire=Blk.get_dir(obj.alias);
+        table=obj.optsTable;
+        key=obj.optsKey;
+
+        n=[];
+        while true
+
+            foptso=[dire 'opts' '.mat'];
+            fopts=[dire 'opts_old' num2str(n) '.mat '];
+
+            flko=[dire 'lookup' '.mat'];
+            flk=[dire 'lookup_old' num2str(n) '.mat '];
+
+            fblko=[dire 'blk' '.mat'];
+            fblk=[dire 'blk_old' num2str(n) '.mat '];
+            if ~exist(fopts,'file') && ~exist(flk,'file') && ~exist(fblk,'file')
+                movefile(foptso,fopts);
+                movefile(flko,flk);
+                movefile(fblko,fblk);
+                break
+            elseif isempty(n)
+                n=1;
+            else
+                n=n+1;
+            end
+        end
+
+    end
+    function obj=save(obj)
+        dire=Blk.get_dir(obj.alias);
+        if ~exist(dire,'dir')
+            mkdir(dire);
+        end
+
+        table=obj.optsTable;
+        key=obj.optsKey;
+        save([dire 'opts'],'table','key');
+
+        table=obj.blkTable;
+        key=obj.blkKey;
+        save([dire 'blk'],'table','key');
+
+        lookup=Blk.make_lookup_struct(obj);
+        save([dire 'lookup'],'lookup');
+
+
     end
 end
 methods(Access=protected)
@@ -176,7 +234,7 @@ methods(Access=protected)
     end
 %% Tables
     function obj=get_opts_tables_(obj)
-        [obj.optsTable,obj.optsKey, obj.nDim,obj.nLvlPerDim,obj.nCmpPerLvl, obj.stdRC,obj.cmpRC]=Blk_con.get_opts_tables(obj.ptchsOpts);
+        [obj.optsTable,obj.optsKey, obj.nDim,obj.nLvlPerDim,obj.nCmpPerDim, obj.stdRC,obj.cmpRC]=Blk_con.get_opts_tables(obj.ptchsOpts);
 
 
     end
@@ -197,7 +255,7 @@ methods(Access=protected)
     end
     function obj=get_blk_table_(obj)
         b=obj.blkOpts;
-        [obj.blkTable,obj.blkKey]=Blk_con.get_blk_table(obj.nDim,obj.nLvlPerDim,obj.nCmpPerLvl,b.modes,b.nBlkPerLvl,b.nTrlPerLvl,b.nIntrvlPerTrl,b.sd);
+        [obj.blkTable,obj.blkKey]=Blk_con.get_blk_table(obj.nDim,obj.nLvlPerDim,obj.nCmpPerDim,b.modes,b.nBlkPerDim,b.nTrlPerLvl,b.nIntrvlPerTrl,b.sd);
 
         %get lvl and cmp ind
         I=find(ismember(obj.blkKey,'lvlInd'));
@@ -220,39 +278,56 @@ methods(Access=protected)
 
 
         % APPEND P
-        obj.get_selInd_table_blk_();
+        obj.get_selInd_table_blk_([]);
+        if ~isempty(obj.replaceBind)
+            obj.get_selInd_table_blk_(obj.replaceBind);
+        end
         obj.blkTable=[obj.blkTable obj.selInd];
         obj.blkKey=[obj.blkKey 'P'];
+
     end
     function cmpInd=get_cmpInd_blk_(obj)
 
 
         b=obj.blkOpts;
         nModes=numel(b.modes);
-        cmpInd=Blk_con.get_cmpInd_blk(nModes,obj.nLvlPerDim,obj.nCmpPerLvl,b.nBlkPerLvl,b.nTrlPerLvl,b.nIntrvlPerTrl);
+        cmpInd=Blk_con.get_cmpInd_blk(nModes,obj.nLvlPerDim,obj.nCmpPerDim,b.nBlkPerDim,b.nTrlPerLvl,b.nIntrvlPerTrl);
     end
-    function obj=get_selInd_table_blk_(obj)
+    function obj=get_selInd_table_blk_(obj,replaceBind)
         %Blk key={'mode','lvlInd','blk','trl','intrvl','cmpInd','cmpNum'};
+
         b=obj.blkOpts;
         repeats=b.repeats;
         mirror=b.mirror;
+        pmirror=b.pmirror;
         binVals=obj.get_src_column('B');
         bins=[obj.ptchsOpts.bins{:}];
         binVals=vertcat(binVals{:});
+        if exist('replaceBind','var') && ~isempty(replaceBind)
+            idx=obj.get_src_column('P');
+            idx=vertcat(idx{:});
+            size(replaceBind)
+            size(idx)
+            binGd=~replaceBind & ismember(idx,obj.selInd); % sample from
+            replaceBind=ismember(obj.selInd, idx(replaceBind));
+        else
+            binGd=true(size(binVals));
+        end
 
-        nLvl=prod(obj.nLvlPerDim);
+        nStd=prod(obj.nLvlPerDim);
         nModes=numel(b.modes);
         nBins=numel(bins);
-        [nIntrvlPerBin,nIntrvlAll]=Blk_con.get_nIntrvlPerBin(nBins,nModes,obj.nLvlPerDim,b.nBlkPerLvl,b.nTrlPerLvl,b.nIntrvlPerTrl);
+        [nIntrvlPerBin,nIntrvlAll]=Blk_con.get_nIntrvlPerBin(nBins,nModes,obj.nLvlPerDim,obj.nCmpPerDim,b.nBlkPerDim,b.nTrlPerLvl,b.nIntrvlPerTrl);
 
+        % XXX
         binCol=obj.get_block_column('bins');
         %nIntrvlPerBin 27000
-        mr=[mirror repeats];
+        mr=[mirror pmirror repeats];
         for i = 1:length(mr)
             m=mr{i};
             switch m
             case 'lvlInd'
-                nIntrvlPerBin=nIntrvlPerBin/nLvl;
+                nIntrvlPerBin=nIntrvlPerBin/nStd;
             case obj.dims
                 ind=ismember(obj.dims,m);
                 nIntrvlPerBin=nIntrvlPerBin/obj.nLvlPerDim(ind);
@@ -265,24 +340,32 @@ methods(Access=protected)
         disp(['nIntrvlPerBin ' num2str(nIntrvlPerBin)]);
         % nIntrvlPerBin1 1800
 
-        obj.selInd=zeros(nIntrvlAll,1);
-        for i = 1:length(bins)
-            binBind=binCol==i; % Available to set
-            obj=bin_table_fun(obj,bins(i),binVals,binBind,repeats,mirror,nIntrvlPerBin);
+        if ~exist('replaceBind','var') || isempty(replaceBind)
+            replaceBind=true(size(binCol));
+            obj.selInd=zeros(nIntrvlAll,1);
+            bReplaceFlag=0;
+        else
+            bReplaceFlag=1;
         end
 
-        function obj=bin_table_fun(obj,bin,binVals,binBind,repeats,mirror,nIntrvlPerBin)
+
+        for i = 1:length(bins)
+            binBind=binCol==i & replaceBind; % Available to set
+            obj=bin_table_fun(obj,bins(i),binVals,binBind,repeats,mirror,pmirror,nIntrvlPerBin,binGd,bReplaceFlag);
+        end
+
+        function obj=bin_table_fun(obj,bin,binVals,binBind,repeats,mirror,pmirror,nIntrvlPerBin,binGd,bReplaceFlag)
 
             % TODO
             % bins
             % and/or?
 
 
-            binInd=find(ismember(binVals,bin)); %Available to SAMPLE FROM
+            binInd=find(ismember(binVals,bin) & binGd); %Available to SAMPLE FROM
             nStm=numel(binInd); % 7008
 
             bReplace=false;
-            if nStm < nIntrvlPerBin
+            if nStm < nIntrvlPerBin & ~bReplaceFlag
                 bReplace=true;
                 disp([ 'Setting replace to true. N aviablable stim in bin ' num2str(bin) ' = ' num2str(nStm) '. Req = ' num2str(nIntrvlPerBin) ]);
             end
@@ -301,22 +384,46 @@ methods(Access=protected)
                 uIndsMir=true(size(binBind));
             else
                 col=obj.get_block_column(mirror);
-                [~,~,uIndsMir]=unique(col,'rows');
-                nUnqMir=(max(uIndsMir));
+                [u,~,uIndsMir]=unique(col,'rows');
+                nUnqMir=numel(u);
             end
 
-            indsAll=false(size(binBind));
+            if isempty(pmirror)
+                nUnqPmir=1;
+                uIndsPmir=true(size(binBind));
+            else
+                col=obj.get_block_column(pmirror);
+                [u,~,uIndsPmir]=unique(col,'rows');
+                nUnqPmir=numel(u);
+            end
+
+            %% mirror
+            indsMir=false(size(binBind));
+            %75000/3 modes /5 bins / 5stds
             for i = 1:nUnqRep
-                ind=(uIndsRep==i) & (uIndsMir==1) & binBind;
-                indsAll=indsAll | ind;
-                obj.selInd(ind)=datasample(binInd,nIntrvlPerBin,'Replace',bReplace);
+                ind=(uIndsRep==i) & (uIndsMir==1) & (uIndsPmir==1) & binBind;
+                if sum(ind)==0
+                    continue
+                end
+                obj.selInd(ind)=datasample(binInd,sum(ind),'Replace',bReplace);
             end
 
+            indsMir=uIndsMir & binBind;
             for i = 2:nUnqMir
                 ind=(uIndsMir==i) & binBind;
-                %K=sum(ind);
-                obj.selInd(ind)=obj.selInd(indsAll);
+                obj.selInd(ind)=obj.selInd(indsMir);
             end
+
+            for j = 1:nUnqRep
+                indsPmir=(uIndsRep==j) & (uIndsPmir==1) & binBind;
+                K=sum(indsPmir);
+                data=obj.selInd(indsPmir);
+                for i = 2:nUnqPmir
+                    ind=(uIndsRep==j) & (uIndsPmir==i) & binBind;
+                    obj.selInd(ind)=data(randperm(K));
+                end
+            end
+
         end
     end
 end
@@ -331,22 +438,36 @@ methods(Static,Access=protected)
         newLinearIndex = sub2ind([M,N],rowIndex,randomizedColIndex);
         B = A(newLinearIndex);
     end
-    function cmpInd=get_cmpInd_blk(nModes,nLvlPerDim,nCmpPerLvl,nBlkPerLvl,nTrlPerLvl,nIntrvlPerTrl)
-        nLvl=prod(nLvlPerDim);
-        nBlk=nModes.*nLvl.*nBlkPerLvl; %50
-        nTrlPerBlk=nTrlPerLvl./nBlkPerLvl; % 180
-        cmpSubs=Blk_con.get_cmpSubs(nCmpPerLvl,nTrlPerBlk,nBlk,nIntrvlPerTrl);
+    function cmpInd=get_cmpInd_blk(nModes,nLvlPerDim,nCmpPerDim,nBlkPerDim,nTrlPerLvl,nIntrvlPerTrl)
+        nStd=prod(nLvlPerDim);
+        nCmp=prod(nCmpPerDim);
+        nBlk=nModes.*nStd.*nBlkPerDim; % 5 * 5 * 3
+        nTrl=nTrlPerLvl.*nCmp;
+        nTrlPerBlk=nTrl./nBlkPerDim; % 180
+        cmpSubs=Blk_con.get_cmpSubs(nCmpPerDim,nTrlPerBlk,nBlk,nIntrvlPerTrl);
         [~,~,cmpInd]=unique(cmpSubs,'rows');
     end
-    function [table,key]=get_blk_table(nDim,nLvlPerDim,nCmpPerLvl,modes,nBlkPerLvl,nTrlPerLvl,nIntrvlPerTrl,sd)
+    function [table,key]=get_blk_table(nDim,nLvlPerDim,nCmpPerDim,modes,nBlkPerDim,nTrlPerLvl,nIntrvlPerTrl,sd)
 
-        nLvl=prod(nLvlPerDim);
-        nCmp=prod(nCmpPerLvl);
+        nStd=prod(nLvlPerDim);
+        nCmp=prod(nCmpPerDim);
         nModes=numel(modes);
-        nBlk=nModes.*nLvl.*nBlkPerLvl; %50
-        nTrlPerBlk=nTrlPerLvl./nBlkPerLvl; % 180
+        nBlk=nModes.*nStd.*nBlkPerDim; %50
+        nTrl=nTrlPerLvl.*nCmp;
+        nTrlPerBlk=nTrl./nBlkPerDim; % 180
 
-        table=distribute(modes,1:nLvl,1:nBlkPerLvl,1:nTrlPerBlk,1:nIntrvlPerTrl); % 18000
+        % 3 25 5 100 2 XXX
+        %nTrlPerBlk
+        %nBlkPerDim
+        %nIntrvlPerTrl
+        %nModes*nStd*nBlkPerDim*nTrlPerBlk*nIntrvlPerTrl
+        % 1 point = 100 trials
+        % 1 curve = 500 trials = 1000 uique stim/bin
+        % across each bin = 1000*5 = 5000 unique stim total
+        % across each dsp = 5000*5 = 25000 stim total
+        % 75000 for all modes
+        % 15000 each bin
+        table=distribute(1:nModes,1:nStd,1:nBlkPerDim,1:nTrlPerBlk,1:nIntrvlPerTrl); % 18000
 
         rng(sd);
         cmpNum=Blk_con.get_cmp_num(nTrlPerBlk,nBlk,nIntrvlPerTrl);
@@ -354,15 +475,15 @@ methods(Static,Access=protected)
         table=[table cmpNum];
         key={'mode','lvlInd','blk','trl','intrvl','cmpNum'};
     end
-    function c=get_cmpSubs(nCmpPerLvl,nTrlPerBlk,nBlk,nIntrvlPerTrl)
+    function c=get_cmpSubs(nCmpPerDim,nTrlPerBlk,nBlk,nIntrvlPerTrl)
         % which comparison to use. 1-5 eg ncol = n dims
         nIntrvlAll=nTrlPerBlk*nBlk*nIntrvlPerTrl;
-        c= zeros(nIntrvlAll,length(nCmpPerLvl));
-        for i = 1:length(nCmpPerLvl)
-            c(:,i)=cmp_fun(nCmpPerLvl(i),nTrlPerBlk,nBlk,nIntrvlPerTrl);
+        c= zeros(nIntrvlAll,length(nCmpPerDim));
+        for i = 1:length(nCmpPerDim)
+            c(:,i)=cmp_fun(nCmpPerDim(i),nTrlPerBlk,nBlk,nIntrvlPerTrl);
         end
-        function c=cmp_fun(nCmpPerLvl,nTrlPerBlk,nBlk,nIntrvlPerTrl)
-            c=repmat(repelem(1:nCmpPerLvl,1,nTrlPerBlk/nCmpPerLvl),nBlk,1);
+        function c=cmp_fun(nCmpPerDim,nTrlPerBlk,nBlk,nIntrvlPerTrl)
+            c=repmat(repelem(1:nCmpPerDim,1,nTrlPerBlk/nCmpPerDim),nBlk,1);
             c=transpose(Blk_con.shuffle_within_rows_(c));
             c=c(:);
             counts=hist(c(1:nTrlPerBlk),unique(c(1:nTrlPerBlk)));
@@ -374,6 +495,7 @@ methods(Static,Access=protected)
     end
     function c=get_cmp_num(nTrlPerBlk,nBlk,nIntrvlPerTrl)
         % std or comparison 1 or comparison 2 ...
+
         c=repmat((1:nIntrvlPerTrl),nTrlPerBlk*nBlk,1);
         c=transpose(Blk_con.shuffle_within_rows_(c));
         c=c(:)-1;
@@ -570,8 +692,9 @@ methods(Static)
               'dims',[],[] ...
               ;'repeats',[],'' ...
               ;'mirror',[],'' ...
+              ;'pmirror',[],'' ...
               ;'modes',[],'isallint' ...
-              ;'nBlkPerLvl',[],'isint' ...
+              ;'nBlkPerDim',[],'isint' ...
               ;'nTrlPerLvl',[],'isint' ...
               ;'nIntrvlPerTrl',[],'isint' ...
               ;'sd',[],'isint', ...
@@ -613,14 +736,9 @@ methods(Static)
         P=Blk_con.get_blk_parseOpts();
         out=parse([],Opts,P);
     end
-    function [nIntrvlPerBin,nIntrvlAll]=get_nIntrvlPerBin(nBins,nModes,nLvlPerDim,nBlkPerLvl,nTrlPerLvl,nIntrvlPerTrl)
-        nLvl=prod(nLvlPerDim);
-        nBlk=nLvl.*nBlkPerLvl; %50
-        nTrlPerBlk=nTrlPerLvl./nBlkPerLvl; % 180
-        nTrlPerMode=nTrlPerBlk*nBlk;
-        nTrl=nTrlPerMode*nModes;
-        nIntrvlPerMode=nTrlPerMode*nIntrvlPerTrl;
-        nIntrvlAll=nTrl*nIntrvlPerTrl;
+    function [nIntrvlPerBin,nIntrvlAll]=get_nIntrvlPerBin(nBins,nModes,nLvlPerDim,nCmpPerDim,nBlkPerDim,nTrlPerLvl,nIntrvlPerTrl)
+        nStd=prod(nLvlPerDim);
+        nIntrvlAll=nTrlPerLvl*prod(nCmpPerDim)*nStd*nIntrvlPerTrl*nModes;
         nIntrvlPerBin=nIntrvlAll/nBins;
     end
 end

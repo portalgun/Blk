@@ -8,14 +8,20 @@ end
 properties(Hidden)
     dims
     lookup
-    lims={};
+    lims={}
 end
 methods
-    function obj=Blk(defName)
+    function obj=Blk(defName,replaceBinds,bSave)
         if nargin < 1
             return
         end
-        BC=Blk_con(defName);
+        if ~exist('replaceBinds','var')
+            replaceBinds=[];
+        end
+        if ~exist('bSave','var') || isempty(bSave)
+            bSave=1;
+        end
+        BC=Blk_con(defName,replaceBinds,bSave);
         obj.alias=BC.alias;
 
         obj.blk=Table(BC.blkTable, BC.blkKey);
@@ -144,8 +150,15 @@ methods
     end
     function stdX=cndInd_to_stdX(obj,cndInd)
         col=obj.get_opts_column(obj.dims);
+        if ~iscell(cndInd)
+            cndInd=num2cell(cndInd);
+        end
+        t=obj.blk('cndInd').unique();
+        cndInd=cellfun(@(x) find(t==x,1,'first'), cndInd);
+        %cndInd=obj.blk.find('cndInd',cndInd);
         stdX=zeros(numel(cndInd),numel(obj.dims));
         for i = 1:size(col,2)
+            % XXX
             s=vertcat(col{cndInd,i});
             stdX(:,i)=cell2mat(s(:,1));
         end
@@ -154,6 +167,12 @@ methods
         if ~exist('cmpNum','var') || isempty(cmpNum)
             cmpNum=1;
         end
+        if ~iscell(cndInd)
+            cndInd=num2cell(cndInd);
+        end
+        t=obj.blk('cndInd').unique();
+        cndInd=cellfun(@(x) find(t==x,1,'first'), cndInd);
+
         ci=cmpNum+1;
         col=obj.get_opts_column(obj.dims);
         cmpX=zeros(numel(cndInd),numel(obj.dims));
@@ -223,7 +242,14 @@ methods
         if ~exist('cmpNum') || isempty(cmpNum)
             cmpNum=1;
         end
-        cmpInt=obj.blk('trl',trl,'cmpNum',cmpNum,'intrvl').ret();
+        if ~exist('trl','var') || isempty(trl)
+            nTrl=1:obj.get_nTrial();
+            trl=num2cell(nTrl);
+        end
+        if ~iscell(trl)
+            trl=num2cell(trl);
+        end
+        cmpInt=obj.blk('trl',trl{:},'cmpNum',cmpNum,'intrvl').ret();
     end
 
     function stdX=get_stdX(obj,trl)
@@ -264,18 +290,10 @@ methods
     end
     function answ=get_correct_2IFC(obj);
         stdX=obj.get_stdX();
-        cmpX=obj.get_cmpX(1);
+        cmpX=obj.get_cmpX([],1);
+        cmpIntrvl=obj.get_cmpIntrvl();
 
-        indrm=all(cmpX==stdX,1);
-        stdX(:,indrm)=[];
-        cmpX(:,indrm)=[];
-
-
-        if abs(cmpX) - abs(stdX) < 0.0001
-            answ=-1;
-        else
-            answ=double(abs(cmpX) > abs(stdX))+1;
-        end
+        answ=Rsp.get_correct_2IFC([],stdX,cmpX,cmpIntrvl);
     end
 %% RET
     function S=ret_blk_struct(obj)
@@ -286,10 +304,9 @@ methods
         S.nStd=numel(obj.blk.unique('lvlInd'));  % 25 | 5
         S.nCmp=numel(obj.blk.unique('cmpInd'));  % 5  | 9
         S.nBlk=numel(obj.blk.unique('blk'));     % 5  | 5
-        S.nTrl=[];
         S.nTrlPerBlk=numel(obj.blk.unique('trl'));     %   | 900
-        S.nTrl=S.nTrlPerBlk*S.nBlk;
-        S.nTrlPerLvl=S.nTrl/S.nCmp; % cmp is lvl?
+        S.nTrlPerLvl=S.nTrlPerBlk*S.nBlk;
+        S.nTrl=S.nTrlPerLvl*S.nCmp;
         S.Xname=obj.dims;
 
         S.methodVars=obj.get_method_vars();

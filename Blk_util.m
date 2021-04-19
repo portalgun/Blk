@@ -1,27 +1,5 @@
 classdef Blk_util < handle
 methods
-    function obj=save(obj)
-        dire=Blk.get_dir(obj.alias);
-        if ~exist(dire,'dir')
-            mkdir(dire);
-        end
-
-        table=obj.optsTable;
-        key=obj.optsKey;
-        save([dire 'opts'],'table','key');
-
-        table=obj.blkTable;
-        key=obj.blkKey;
-        save([dire 'blk'],'table','key');
-
-        lookup=Blk.make_lookup_struct(obj);
-        save([dire 'lookup'],'lookup');
-
-
-    end
-%% CONVERSIONS
-
-    %% CND
 end
 methods(Static)
     function [t,dims] = make_lookup_tables(BC)
