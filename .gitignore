@@ -1,2 +1,5 @@
 _old/
 _old/**
+.History.xml
+.History.bak
+.history.m

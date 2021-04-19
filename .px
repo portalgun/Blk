@@ -1,8 +1,11 @@
 d;imap
-e;BONICH;E;\Psychtoolbox
+e;BONICH;E:\Psychtoolbox
 e;BONICE;/home/dambam/src/Psychtoolbox
 e;jburge-wheatstone.psych.upenn.edu;/Applications/Psychtoolbox
 e;jburge-wheatstone.psych.upenn.edu;/Users/Shared/VPixx_Software_Tools
 d;psycho
 d;Patch
 d;isuniform.m
+d;MyMatSql
+d;CfgRd
+d;ParseTools
