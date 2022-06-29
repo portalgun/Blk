@@ -1,0 +1,64 @@
+
+Note: Under development.
+
+* Description
+Systematically create a table of parameters for each interval of each trial for a set of psychophysics experiments.
+Supports multiple variables for fully-crossed experiments.
+
+* Usage
+Blk(defName,replaceBinds,bSave)
+    defName - name of configuration file
+    replaceBinds - binary index for replacement (eg. after reviewing sampled stimulus patches)
+    bSave        - whether to save
+* Example configuration file
+https://github.com/portalgun/DSP2/blob/master/_def/D_blk_DSP2.m
+
+dtb - database name
+
+pchAlias - alias for ptchs
+    OR
+hash    - ptchs hash
+
+experiment dimensions
+    modes
+    dims (each)
+    blocks
+
+modes - 1=test, 2=train, 3=pilot
+nBlkPerDim - number of blocks
+nTrlPerLvl -
+repeats - indiciates over which experiment dimension to allow repeats
+          blk, $dim,
+mirror  - across which experiment dimensions are parameters the same
+pmirror - pseudo-mirror. across which experiment dimension are parameters the same, but randomized
+linked  - which paramters are linked
+
+sd - seed to use for rng
+
+dims - names of independent variables
+trgtDispOrWin - indicates whether target is relative to display or window
+focDispOrWin - indicates whether fixation is relative to display or window
+
+wdwType   - sindow type. COS=cosine.
+wdwPszRCT - window size in pixels YxXxTime
+wdwRmpDm  - window ramp diameter
+wdwDskDm  - window disk diameter
+wdwSymInd - index (like 3rd output of unique()) labelling which dimensions are symmetric
+
+rmsFix - RMS luminance contrast value
+dcFix  - mean luminance value
+dnkFix - patch downsampling factor
+duration - duration of stimulus presentation
+
+* Dependencies
+portalgun/CfgRd
+portalgun/isuniform.m
+portalgun/ParseTools
+portalgun/Table
+portalgun/imap (will be optional)
+    currently relies on imap project aliasing, which I want to split out into its own repo.
+portalgun/Patch (will be optional)
+    samples patches for experimentation
+* Optional Dependencies
+portalgun/Px (will be able to handle dependencies automatically)
+portalgun/MyMatSql
