@@ -1,27 +1,274 @@
-classdef Blk < handle & Blk_util & Blk_verify
+classdef Blk < handle & Blk_util & Blk_verify & matlab.mixin.CustomDisplay
 properties
     alias
 
-    blk
     opts
+
+    lookup
 end
 properties(Hidden)
+    blk
     dims
-    lookup
     lims={}
 end
+properties(Constant,Access=private)
+    PROPS={'alias','opts','lookup','dims','lims'};
+end
 methods
-    function obj=Blk(defName,replaceBinds,bSave)
+    function varargout=subsref(obj,s)
+        switch s(1).type
+        case '.'
+            [n,bBlk]=obj.get_nargout(s(1).subs);
+            if bBlk
+                out= builtin('subsref',obj.blk,s);
+                if isa(out,'Table')
+                    o=obj.copy();
+                    o.blk.Table=out;
+                    out=o;
+                end
+            elseif nargout < 1
+                builtin('subsref',obj,s);
+                return
+            else
+                out=builtin('subsref',obj,s);
+            end
+        otherwise
+            extra=['lvl' 'cmp' obj.lookup.lvl.KEY(2:end)]; % SLOW 4
+            KEYS=[obj.blk.KEY extra];
+            ind=cellfun(@(x) ischar(x) && ismember_cell(x,{'lvls','stds','std'}),s(1).subs);
+            if sum(ind)
+                s(1).subs{ind}='lvl';
+            end
+            K=subs_parse(obj.blk,s(1).subs,KEYS); % SLOW 2 - Table.subs_parse, Table.subsParse
+            OUTKEYS=K.outKeys;
+            Klvl=split_fun(K,'lvl');
+            Kcmp=split_fun(K,'cmp');
+
+            K=    K_fun(K,Klvl,'lvl');
+            K=    K_fun(K,Kcmp,'cmp');
+            K.KEYS(ismember_cell(K.KEYS,extra))=[]; % SLOW 1
+
+            lvlInd=ismember(K.outKeys,'lvl');
+            bLvl=any(lvlInd);
+            if bLvl
+                lvlInd=ismember_cell(K.outKeys,'lvl');
+                K.outKeys(lvlInd)=[];
+                outKeys=K.outKeys;
+                K.outKeys={};
+            end
+
+            out=obj.copy();
+            out.blk=subsref_ind(obj.blk,[],K); % (SLOW 3)
+            if length(s) > 1
+                out=subsref(out,s(2:end));
+            end
+            if bLvl
+                inds=out.blk{'lvlInd'};
+                names=out.lookup.lvl.KEY(2:end);
+                lvls=out.lookup.lvl.each('stdInd',inds,names{:});
+                if isempty(outKeys)
+                    out.blk.TABLE=lvls.TABLE;
+                    out.blk.KEY=lvls.KEY;
+                    out.blk.types=lvls.types;
+                else
+                    i=ismember_cell(out.blk.KEY,outKeys);
+                    out.blk.TABLE=out.blk.TABLE(i);
+                    out.blk.KEY=out.blk.KEY(i);
+                    out.blk.types=out.blk.types(i);
+                    out.blk.TABLE=horzcat(out.blk.TABLE,lvls.TABLE);
+                    out.blk.KEY=horzcat(out.blk.KEY,lvls.KEY);
+                    out.blk.types=horzcat(out.blk.types,lvls.types);
+                    [~,ind]=ismember_cell(out.blk.KEY,OUTKEYS);
+                    N=1:max(ind);
+
+                    miss=N(~ismember(N,ind));
+                    missInd=ind==0;
+                    nMiss=sum(missInd);
+                    ind(ind >= miss)=ind(ind > miss)+nMiss-1;
+                    ind(missInd)=(1:nMiss)+miss-1;
+                    [~,ind]=sort(ind);
+
+                    out.blk.TABLE=out.blk.TABLE(ind);
+                    out.blk.KEY=out.blk.KEY(ind);
+                    out.blk.types=out.blk.types(ind);
+
+                end
+            end
+        end
+        if strcmp(s(1).type,'{}')
+            %if s(1).subs
+            if length(s(1))==1
+                s1=s(1).subs{1};
+                out=out.blk.TABLE;
+                [varargout{1:nargout}]=out{:};
+                %if ischar(s1) && strcmp(s1,':')
+                %    out=out.blk.TABLE;
+                %    [varargout{1:nargout}]=out{:};
+                %else
+                %    out=out.blk.TABLE;
+                %    [varargout{1:nargout}]=out{:};
+                %else
+                %    dk
+                %end
+            else
+                dk
+            end
+        else
+            [varargout{1:nargout}]=out;
+        end
+        function K=K_out_fun(K,Kin,name)
+            if isempty(Kin.outKeys)
+                return
+            end
+            pkey=obj.lookup.(name).KEY{1};
+            keys=obj.lookup.(name).KEY(2:end);
+
+            % RM
+            ind=ismember(K.outKeys,name);
+            K.outKeys{ind}='lvlInd';
+        end
+        function K=K_fun(K,Kin,name)
+            if isempty(Kin.keys)
+                return
+            end
+
+            pkey=obj.lookup.(name).KEY{1};
+            keys=obj.lookup.(name).KEY(2:end);
+            n=size(Kin.vals{1},1);
+            Ind=zeros(n,1);
+            for i = 1:n
+                vals=num2cell(Kin.vals{1}(i,:));
+                try
+                    subs=[keys; vals];
+                catch ME
+                    error('Not enough values for lvls lookup. %d required.')
+                end
+                Ind(i)=obj.lookup.(name){subs{:},pkey};
+            end
+
+            % RM
+            ind=ismember(K.keys,name);
+            K.keys{ind}='lvlInd';
+            K.vals{ind}=Ind;
+        end
+        function Knew=split_fun(K,key)
+            if ~isempty(K.keys)
+                ind=ismember_cell(K.keys,key);
+            else
+                ind=[];
+            end
+            Knew=K;
+            Knew.keys(~ind)=[];
+            Knew.vals(~ind)=[];
+            Knew.signs(~ind)=[];
+            Knew.ineqs(~ind)=[];
+
+            ind=ismember_cell(K.outKeys,key);
+            Knew.outKeys(~ind)=[];
+        end
+
+    end
+    function n = numArgumentsFromSubscript(obj,s,indexingContext)
+        n=numArgumentsFromSubscript(obj.blk,s,indexingContext);
+    end
+    function [n,bBlk]=get_nargout(obj,subs)
+        if strcmp(subs,'blk') || strcmp(subs,'alias') || strcmp(subs,'opts') || strcmp(subs,'lookup') || strcmp(subs,'dims') || strcmp(subs,'lims')
+            n=nargout;
+            bBlk=false;
+        elseif ismethod(obj.blk,subs) || ismethod('Table',subs)
+            str=['Table>Table.' subs];
+            n=nargout(str);
+            bBlk=true;
+        else
+            str=['Blk>Blk.' subs];
+            n=nargout(str);
+            bBlk=false;
+        end
+    end
+end
+methods(Static)
+    function [obj,newInd]=get(alias)
+        if nargin < 1
+            alias=[];
+        end
+        [obj,newInd]=Blk.get_helper(alias);
+        if nargout < 1
+            assignin('caller','B',obj);
+        end
+    end
+    function a=getAlias()
+        a=Env.var('BLK_ALIAS');
+        if isempty(a)
+            a=Env.var('ALIAS');
+        end
+    end
+    function out=readConfig()
+        if nargin < 1
+            alias=Blk.getAlias();
+        end
+        if ~isempty(alias)
+            out=Cfg.readScript(['D_blk_' alias ]);
+        end
+    end
+    function b=gen(alias)
+        if nargin < 1
+            alias=Blk.getAlias();
+        end
+        if ~isempty(alias)
+            b=Blk(alias);
+        end
+    end
+    function b=renew(pAlias,bAlias)
+        if nargin < 1
+            pAlias=Blk.getAlias();
+        end
+        if nargin < 2
+            bAlias=Blk.getAlias();
+        end
+        if ~isempty(pAlias)
+            P=ptchs.load(pAlias);
+        end
+        P.apply_block_all(bAlias);
+        b=Blk(bAlias,P);
+    end
+end
+methods(Static,Access=protected)
+    function [b,newInd]=get_helper(alias)
+        if isempty(alias)
+            alias=Blk.getAlias();
+            Error.warnSoft(['Using blk alias ' alias]);
+        end
+        if ~isempty(alias)
+            [b,newInd]=Blk.load(alias);
+        end
+    end
+end
+methods(Access=protected)
+    function out=displayEmptyObject(obj)
+        display([obj.getHeader() newline obj.getFooter()]);
+    end
+    function out=getHeader(obj)
+        dim = matlab.mixin.CustomDisplay.convertDimensionsToString(obj.blk);
+        name = matlab.mixin.CustomDisplay.getClassNameForHeader(obj);
+        out=['  ' dim ' ' name newline];
+    end
+    function out=getFooter(obj)
+        out=obj.blk.get_footer();
+        %out=' ';
+    end
+end
+methods
+    function obj=Blk(defName,P,bSave)
         if nargin < 1
             return
         end
-        if ~exist('replaceBinds','var')
-            replaceBinds=[];
+        if ~exist('P','var')
+            P=[];
         end
         if ~exist('bSave','var') || isempty(bSave)
             bSave=1;
         end
-        BC=Blk_con(defName,replaceBinds,bSave);
+        BC=Blk_con(defName,P,bSave);
         obj.alias=BC.alias;
 
         obj.blk=Table(BC.blkTable, BC.blkKey);
@@ -31,8 +278,15 @@ methods
         %obj.opts=Table(BC.optsTable, BC.optsKey); % XXX
         [obj.lookup,obj.dims]=Blk.make_lookup_tables(BC);
     end
+    function new=copy(obj)
+        new=Blk();
+        for i = 1:length(obj.PROPS)
+            new.(obj.PROPS{i})=obj.(obj.PROPS{i});
+        end
+    end
     function new=select_block(obj,mode,lvlInd,blkNum)
-        new=copyObj(obj);
+
+        new=obj.copy();
         new.dims=obj.dims;
         new.lookup=obj.lookup;
         new.blk=obj.blk('mode',mode,'blk',blkNum,'lvlInd',lvlInd);
@@ -53,7 +307,7 @@ methods
             fld=obj.opts.key{i};
             col=obj.get_opts_column(fld);
 
-            if isuniform(col)
+            if Set.isUniform(col)
                 S.(fld)=col{1};
                 if iscell(S.(fld)) && numel(S.(fld)) ==1
                     S.(fld)=S.(fld){1};
@@ -141,7 +395,6 @@ methods
     function cmps=cndInd_to_cmpInd(obj,cndInd)
         cmps=obj.lookup.cnd(cndInd,'cmpInd').ret();
     end
-
     function cnd=lvlInd_cmpInd_to_cndInd(obj,lvl,cmp)
         nStd=size(obj.lookup.lvl,1);
         nCmp=size(obj.lookup.cmp,1);
@@ -163,6 +416,35 @@ methods
             stdX(:,i)=cell2mat(s(:,1));
         end
     end
+    function out=lvl2ind(obj,lvls)
+        s=struct('type','()','subs',[]);
+        s.subs={'lvl',lvls,'lvls','lvlInd'};
+        B=subsref(obj,s);
+        out=B.blk.unique_rows().ret();
+        [~,ind]=ismember(lvls,out(:,1:end-1),'rows');
+        out=out(ind,end);
+    end
+    function [out]=ind2lvl(obj,lvlInd)
+        lvlInd=Vec.col(lvlInd);
+        s=struct('type','()','subs',[]);
+        s.subs={'lvlInd',lvlInd,'lvls','lvlInd'};
+        B=subsref(obj,s);
+        out=B.blk.unique_rows().ret();
+        [~,ind]=ismember(lvlInd,out(:,end),'rows');
+        out=out(ind,1:end-1);
+    end
+    function vals=ind2val(obj,ind)
+        tbl=obj.lookup.cnd('lvlInd',ind,'lvlInd','cndInd').ret();
+        [~,ind]=ismember(ind,tbl(:,1));
+        cnd=tbl(ind,2);
+        names=obj.lookup.lvl.KEY(2:end);
+        vals=zeros(length(ind),length(names),1);
+        for i = 1:length(names)
+            ii=ismember(obj.opts.key,names{i});
+            val=vertcat(obj.opts.table{cnd,ii});
+            vals(:,i)=vertcat(val{:,1});
+        end
+    end
     function cmpX=cndInd_to_cmpX(obj,cndInd,cmpNum)
         if ~exist('cmpNum','var') || isempty(cmpNum)
             cmpNum=1;
@@ -182,10 +464,7 @@ methods
         end
     end
     function cndInd=trial_to_cndInd(obj,trials)
-        if ~iscell(trials)
-            trials=num2cell(trials);
-        end
-        cndInd=obj.blk('trl',trials{:},'intrvl',1,'cndInd').ret();
+        cndInd=obj.blk('trl',trials,'intrvl',1,'cndInd').ret();
     end
     function stdX=trial_to_stdX(obj,trial)
         cndInd=obj.trial_to_cndInd(trial);
@@ -199,27 +478,15 @@ methods
         cmpX=obj.cndInd_to_cmpX(cndInd,cmpNum);
     end
     function stmInd=trial_to_stmInd(obj,trls)
-        if ~iscell(trls);
-            trls=num2cell(trls);
-        end
-        stmInd=obj.blk.find('trl',trls{:});
+        stmInd=obj.blk.find('trl',trls);
     end
     function [trl,intrvl]=stmInd_to_trial_interval(obj,stmInd)
-        if ~iscell(stmInd);
-            stmInd=num2cell(stmInd);
-        end
-        out=obj.blk(stmInd{:},'trl','intrvl').ret();
+        out=obj.blk(stmInd,'trl','intrvl').ret();
         trl=out(:,1);
         intrvl=out(:,2);
     end
     function stmInd=trial_intrvl_to_stmInd(obj,trls,intrvls)
-        if ~iscell(trls);
-            trls=num2cell(trls);
-        end
-        if ~iscell(intrvls);
-            intrvls=num2cell(intrvls);
-        end
-        stmInd=obj.blk.find('trl',trls{:},'intrvl',intrvls{:});
+        stmInd=obj.blk.find('trl',trls,'intrvl',intrvls);
     end
 
 %% GET
@@ -244,14 +511,31 @@ methods
         end
         if ~exist('trl','var') || isempty(trl)
             nTrl=1:obj.get_nTrial();
-            trl=num2cell(nTrl);
         end
-        if ~iscell(trl)
-            trl=num2cell(trl);
-        end
-        cmpInt=obj.blk('trl',trl{:},'cmpNum',cmpNum,'intrvl').ret();
+        cmpInt=obj.blk('trl',trl,'cmpNum',cmpNum,'intrvl').ret();
     end
+    function bins=get_bins(obj)
+        bins=obj.lookup.lvl('bins').ret();
+        lvl=obj.lookup.cnd('lvlInd').ret();
+        cnd=obj.blk('cndInd').ret();
 
+        bins=bins(lvl(cnd));
+    end
+    function n=get_nbins(obj)
+        n=numel(obj.lookup.lvl('bins').unique());
+    end
+    function n=get_nLvls(obj)
+        n=size(obj.get_stdX_unq(),1);
+    end
+    function out=get_lvlInds(obj)
+        out=obj.blk.unique('lvlInd');
+    end
+    function out=get_modes(obj)
+        out=obj.blk.unique('mode');
+    end
+    function out=get_blocks(obj)
+        out=obj.blk.unique('blk');
+    end
     function stdX=get_stdX(obj,trl)
         if ~exist('trl','var') || isempty(trl)
             nTrl=obj.get_nTrial();
@@ -267,7 +551,6 @@ methods
             nTrl=obj.get_nTrial();
             trl=1:nTrl;
         end
-
         cmpX=obj.trial_to_cmpX(trl,cmpNum);
     end
     function stdXunq=get_stdX_unq(obj)
@@ -355,7 +638,7 @@ methods
             dim=obj.dims{i};
             if all(cellfun(@isnumeric,stds{i}))
                 stds{i}=cell2mat(stds{i});
-                if isuniform(stds{i},2)
+                if Set.isUniform(stds{i},2)
                     stds{i}=stds{i}(:,1);
                 end
             end
@@ -367,6 +650,33 @@ methods
     end
     function cmps=get_cmp_unq(obj)
         cmps=obj.lookup.cmp(:,2:end);
+    end
+    function saveas(obj,alias)
+        obj.alias=alias;
+
+        dire=Blk.getDir(obj.alias);
+        if ~exist(dire,'dir')
+            Dir.mk_p(dire);
+        end
+
+        table=obj.opts.table;
+        key=obj.opts.key;
+        save([dire 'opts'],'table','key');
+
+        table=obj.blk.TABLE;
+        key=obj.blk.KEY;
+        name=[dire 'blk.mat'];
+        if Fil.exist(name)
+            oldDir=[dire 'blk' filesep];
+            Dir.mk_p(oldDir);
+            dat=char(datestr(now,'_yy_mm_dd_HH_MM'));
+            oldName=[oldDir 'blk' dat '.mat'];
+            Fil.move(name,oldName);
+        end
+        save([dire 'blk'],'table','key');
+
+        lookup=Blk.make_lookup_struct(obj);
+        save([dire 'lookup'],'lookup');
     end
 end
 methods(Access=private)
@@ -405,10 +715,10 @@ methods(Access=private)
     end
 end
 methods(Static)
-    function obj=load(alias)
+    function [obj,newInd]=load(alias)
         obj=Blk();
         obj.alias=alias;
-        obj.blk=Blk.load_blk(alias);
+        [obj.blk,newInd]=Blk.load_blk(alias);
         obj.opts=Blk.load_opts_raw(alias); % XXX change later
         [obj.lookup,obj.dims]=Blk.load_lookup(alias);
     end

@@ -4,9 +4,13 @@ properties
     alias
     database
     hash
+    hashExtra
 
     srcTable
     srcKey
+
+    srcTableExtra
+    srcKeyExtra
 
     ptchsOpts
     blkOpts
@@ -35,32 +39,35 @@ properties
     nDim
     nCmpPerDim
     nLvlPerDim
+
+    newInd
 end
 properties(Hidden)
+    P
     stdRC
     cmpRC
-    replaceBind
+    badBind     % patch bInds that are bad
+    prefBind
 end
 methods(Access = ?Blk)
-    function obj=Blk_con(defName,replaceBind,bSave)
+    function obj=Blk_con(defName,P,bSave)
         if ~startsWith(defName,'D_exp_')
             defName=['D_blk_' defName];
-        end
-        if exist('replaceBind','var') && ~isempty(replaceBind)
-            obj.replaceBind=replaceBind;
         end
         if ~exist('bSave','var') || isempty(bSave)
             bSave=1;
         end
+        obj.P=P;
         fname=which(defName);
         if isempty(fname)
             error('Cant find file from defName');
         end
         obj.defName=defName;
-        obj.alias=sed('s',defName,'^D_blk_','');
+        obj.alias=regexprep(defName,'^D_blk_','');
 
         [blkOpts,ptchsOpts]=obj.load_def_();
         obj.load_src_table_();
+        obj.load_bad_flags_();
 
         obj.parse_blkOpts_(blkOpts);
         obj.parse_ptchsOpts_(ptchsOpts);
@@ -68,13 +75,14 @@ methods(Access = ?Blk)
         obj.get_opts_tables_();
         obj.get_lvlInd_tables_();
         obj.get_blk_table_();
-        if bSave && ~isempty(obj.replaceBind)
-            obj.move();
-        end
+        %if bSave
+        %    % XXX
+        %    obj.move();
+        %end
         obj.save();
     end
     function obj=move(obj)
-        dire=Blk.get_dir(obj.alias);
+        dire=Blk.getDir(obj.alias);
         table=obj.optsTable;
         key=obj.optsKey;
 
@@ -103,18 +111,27 @@ methods(Access = ?Blk)
 
     end
     function obj=save(obj)
-        dire=Blk.get_dir(obj.alias);
+        dire=Blk.getDir(obj.alias);
         if ~exist(dire,'dir')
-            mkdir(dire);
+            Dir.mk_p(dire);
         end
 
         table=obj.optsTable;
         key=obj.optsKey;
-        save([dire 'opts'],'table','key');
+        newInd=obj.newInd;
+        save([dire 'opts'],'table','key','newInd');
 
         table=obj.blkTable;
         key=obj.blkKey;
-        save([dire 'blk'],'table','key');
+        name=[dire 'blk.mat'];
+        if Fil.exist(name)
+            oldDir=[dire 'blk' filesep];
+            Dir.mk_p(oldDir);
+            dat=char(datestr(now,'_yy_mm_dd_HH_MM'));
+            oldName=[oldDir 'blk' dat '.mat'];
+            Fil.move(name,oldName);
+        end
+        save([dire 'blk'],'table','key','newInd');
 
         lookup=Blk.make_lookup_struct(obj);
         save([dire 'lookup'],'lookup');
@@ -124,14 +141,30 @@ methods(Access = ?Blk)
 end
 methods(Access=protected)
 %% UTIL
+    function obj=load_bad_flags_(obj)
+        obj.P.Flags.load();
+        obj.badBind=obj.P.Flags.bad | obj.P.Flags.poor;
+        obj.prefBind=obj.P.Flags.seen | obj.P.Flags.SEEN;
+    end
     function obj=load_src_table_(obj)
-        [obj.srcTable,obj.srcKey]=imapPch.load_src_table(obj.database,obj.hash);
+        [obj.srcTable,obj.srcKey]=ImapTbl.load_src_table(obj.database,obj.hash);
+        if ~isempty(obj.hashExtra)
+            [obj.srcTableExtra,obj.srcKeyExtra]=ImapTbl.load_src_table(obj.database,obj.hashExtra);
+        end
     end
-    function col=get_src_column(obj,key)
-        ind=ismember(obj.srcKey,key);
-        col=obj.srcTable(:,ind);
+    function col=get_src_column(obj,key,bExtra)
+        if nargin < 3
+            bExtra=false;
+        end
+        if bExtra
+            ind=ismember(obj.srcKeyExtra,key);
+            col=obj.srcTableExtra(:,ind);
+        else
+            ind=ismember(obj.srcKey,key);
+            col=obj.srcTable(:,ind);
+        end
     end
-    function col=get_block_column(obj,key)
+    function col=get_block_column(obj,key,bExtra)
         if ~iscell(key)
             key={key};
         end
@@ -206,10 +239,17 @@ methods(Access=protected)
         obj.database=dtb;
 
         if exist('pchAlias','var') && ~isempty(pchAlias)
-            hashes=imapCommon.alias2hashes(pchAlias,obj.database);
-            obj.hash=hashes.pch;
+            hashes=ImapCommon.alias2hashes(pchAlias,obj.database);
+            obj.hash=hashes.tbl;
         elseif exist('hash','var') && ~isempty(hash)
             obj.hash=hash;
+        else
+            error('Patches hash or alias required in def-file');
+        end
+
+        if exist('pchExtraAlias','var') && ~isempty(pchExtraAlias)
+            hashes=ImapCommon.alias2hashes(pchExtraAlias,obj.database);
+            obj.hashExtra=hashes.tbl;
         else
             error('Patches hash or alias required in def-file');
         end
@@ -278,13 +318,28 @@ methods(Access=protected)
 
 
         % APPEND P
-        obj.get_selInd_table_blk_([]);
-        if ~isempty(obj.replaceBind)
-            obj.get_selInd_table_blk_(obj.replaceBind);
+        if ~isempty(obj.P) && ~isempty(obj.P.Blk)
+            obj.mod_selInd_table_blk_();
+        else
+            obj.get_selInd_table_blk_([]);
         end
+
         obj.blkTable=[obj.blkTable obj.selInd];
         obj.blkKey=[obj.blkKey 'P'];
 
+    end
+    function mod_selInd_table_blk_(obj)
+        blkOld=obj.P.Blk.blk;
+        obj.selInd=obj.P.Blk.blk('P').ret();
+        old=obj.selInd;
+        %replaceInd=find(obj.P.idx.flags > 0);
+        replaceInd=[];
+
+        %pidx=find(obj.P.idx flags == 0  && obj.P.idx.seen > 0);
+        %fixBind=isemember(obj.selind,pidx);
+        obj.get_selInd_table_blk_(replaceInd);
+        %sum(ismember(old,obj.selInd))
+        %dk
     end
     function cmpInd=get_cmpInd_blk_(obj)
 
@@ -293,139 +348,279 @@ methods(Access=protected)
         nModes=numel(b.modes);
         cmpInd=Blk_con.get_cmpInd_blk(nModes,obj.nLvlPerDim,obj.nCmpPerDim,b.nBlkPerDim,b.nTrlPerLvl,b.nIntrvlPerTrl);
     end
-    function obj=get_selInd_table_blk_(obj,replaceBind)
+    function obj=get_selInd_table_blk_(obj,replaceInd)
         %Blk key={'mode','lvlInd','blk','trl','intrvl','cmpInd','cmpNum'};
 
         b=obj.blkOpts;
-        repeats=b.repeats;
-        mirror=b.mirror;
-        pmirror=b.pmirror;
-        binVals=obj.get_src_column('B');
+        O.repeats=b.repeats;
+        O.mirror=b.mirror;
+        O.pmirror=b.pmirror;
         bins=[obj.ptchsOpts.bins{:}];
-        binVals=vertcat(binVals{:});
-        if exist('replaceBind','var') && ~isempty(replaceBind)
+        O.binVals=obj.get_src_column('B');
+        O.binVals=vertcat(O.binVals{:});
+
+        if ~isempty(obj.srcTableExtra)
+            O.binValsExtra=obj.get_src_column('B',true);
+            O.binValsExtra=vertcat(O.binValsExtra{:});
+            O.binGdExtra=true(size(O.binValsExtra));
+
+            O.extraPref=obj.prefBind(size(O.binVals,1)+1:end,:);
+        else
+            O.binValsExtra=[];
+            O.extraPref=false(size(binVals));
+        end
+
+        if exist('replaceInd','var') && ~isempty(replaceInd)
             idx=obj.get_src_column('P');
             idx=vertcat(idx{:});
-            size(replaceBind)
-            size(idx)
-            binGd=~replaceBind & ismember(idx,obj.selInd); % sample from
-            replaceBind=ismember(obj.selInd, idx(replaceBind));
+
+            O.binGd=~ismember(idx,replaceInd) & ~ismember(idx,obj.selInd); % sample from
+            replaceBind=ismember(obj.selInd, replaceInd);
+            disp(['replacing ' num2str(numel(replaceInd)) ]);
         else
-            binGd=true(size(binVals));
+            %idx=[];
+            O.binGd=true(size(O.binVals));
+        end
+
+        if ~isempty(obj.badBind)
+            %if isempty(idx)
+            %    idx=obj.get_src_column('P');
+            %    idx=vertcat(idx{:});
+            %end
+
+            % HANDLE BADBIND EXTRA
+            badBind=obj.badBind;
+            if size(O.binGd,1) < size(badBind,1) && ~isempty(O.binValsExtra)
+                bb=badBind;
+                badBind=bb(1:size(O.binGd,1));
+                badBindExtra=bb(size(O.binGd,1)+1:end);
+                O.binGdExtra=O.binGdExtra & ~badBindExtra;
+                O.extraPref=O.extraPref & O.binGdExtra;
+                % TODO add exist as secondary pref?
+            end
+
+            O.binGd=O.binGd & ~badBind; % XXX check
         end
 
         nStd=prod(obj.nLvlPerDim);
         nModes=numel(b.modes);
         nBins=numel(bins);
-        [nIntrvlPerBin,nIntrvlAll]=Blk_con.get_nIntrvlPerBin(nBins,nModes,obj.nLvlPerDim,obj.nCmpPerDim,b.nBlkPerDim,b.nTrlPerLvl,b.nIntrvlPerTrl);
+        [O.nIntrvlPerBin,nIntrvlAll]=Blk_con.get_nIntrvlPerBin(nBins,nModes,obj.nLvlPerDim,obj.nCmpPerDim,b.nBlkPerDim,b.nTrlPerLvl,b.nIntrvlPerTrl);
 
         % XXX
         binCol=obj.get_block_column('bins');
         %nIntrvlPerBin 27000
-        mr=[mirror pmirror repeats];
+        mr=[O.mirror O.pmirror O.repeats];
         for i = 1:length(mr)
             m=mr{i};
             switch m
             case 'lvlInd'
-                nIntrvlPerBin=nIntrvlPerBin/nStd;
+                O.nIntrvlPerBin=O.nIntrvlPerBin/nStd;
             case obj.dims
                 ind=ismember(obj.dims,m);
-                nIntrvlPerBin=nIntrvlPerBin/obj.nLvlPerDim(ind);
+                O.nIntrvlPerBin=O.nIntrvlPerBin/obj.nLvlPerDim(ind);
             case 'mode'
-                nIntrvlPerBin=nIntrvlPerBin/nModes;
+                O.nIntrvlPerBin=O.nIntrvlPerBin/nModes;
             otherwise obj.dims
                 error(['Unhandled repeat or mirror case: ' m ]);
             end
         end
-        disp(['nIntrvlPerBin ' num2str(nIntrvlPerBin)]);
+        disp(['nIntrvlPerBin ' num2str(O.nIntrvlPerBin)]);
         % nIntrvlPerBin1 1800
 
         if ~exist('replaceBind','var') || isempty(replaceBind)
             replaceBind=true(size(binCol));
             obj.selInd=zeros(nIntrvlAll,1);
-            bReplaceFlag=0;
+            O.bReplaceFlag=0;
         else
-            bReplaceFlag=1;
+            O.bReplaceFlag=1;
         end
-
 
         for i = 1:length(bins)
             binBind=binCol==i & replaceBind; % Available to set
-            obj=bin_table_fun(obj,bins(i),binVals,binBind,repeats,mirror,pmirror,nIntrvlPerBin,binGd,bReplaceFlag);
+            obj.selInd_bin_(bins(i),binBind,O);
         end
 
-        function obj=bin_table_fun(obj,bin,binVals,binBind,repeats,mirror,pmirror,nIntrvlPerBin,binGd,bReplaceFlag)
+        % SHOULD EQUAL
+        assert(sum(obj.selInd == 0)==0);
 
-            % TODO
-            % bins
-            % and/or?
+        n=size(O.binVals);
+        bPref=ismember(obj.selInd,n+find(O.extraPref));
+        bExtra=obj.selInd > size(O.binVals,1);
 
+        extraInd=unique(obj.selInd(bExtra));
+        disp(sprintf('%d extra sampled',numel(extraInd)));
 
-            binInd=find(ismember(binVals,bin) & binGd); %Available to SAMPLE FROM
-            nStm=numel(binInd); % 7008
+        prefInd=unique(obj.selInd(bExtra & bPref));
+        disp(sprintf('%d pref used',numel(prefInd)));
 
-            bReplace=false;
-            if nStm < nIntrvlPerBin & ~bReplaceFlag
-                bReplace=true;
-                disp([ 'Setting replace to true. N aviablable stim in bin ' num2str(bin) ' = ' num2str(nStm) '. Req = ' num2str(nIntrvlPerBin) ]);
-            end
+        obj.newInd=unique(obj.selInd(bExtra & ~bPref));
+        disp(sprintf('%d new samples',numel(obj.newInd)));
+    end
 
-            if isempty(repeats)
-                nUnqRep=1;
-                uIndsRep=true(size(binBind));
-            else
-                col=obj.get_block_column(repeats);
-                [~,~,uIndsRep]=unique(col,'rows');
-                nUnqRep=(max(uIndsRep));
-            end
+    function selInd_bin_(obj,bin,selBinBind,O)
+        % selBinBind %SEL DESTINATION INDEX FOR GIVEN BIN
 
-            if isempty(mirror)
-                nUnqMir=1;
-                uIndsMir=true(size(binBind));
-            else
-                col=obj.get_block_column(mirror);
-                [u,~,uIndsMir]=unique(col,'rows');
-                nUnqMir=numel(u);
-            end
+        % TODO RETURN INDS THAT ARE EXTRA
+        % HERE
 
-            if isempty(pmirror)
-                nUnqPmir=1;
-                uIndsPmir=true(size(binBind));
-            else
-                col=obj.get_block_column(pmirror);
-                [u,~,uIndsPmir]=unique(col,'rows');
-                nUnqPmir=numel(u);
-            end
+        % TODO
+        % bins
+        % and/or?
+        %
+        %bReplace=true;
 
-            %% mirror
-            indsMir=false(size(binBind));
-            %75000/3 modes /5 bins / 5stds
-            for i = 1:nUnqRep
-                ind=(uIndsRep==i) & (uIndsMir==1) & (uIndsPmir==1) & binBind;
-                if sum(ind)==0
-                    continue
+        bReplace=false;
+        N=size(selBinBind);
+        M=obj.get_mirror_opts(O,N);
+
+        binIndPool=find(ismember(O.binVals,bin) & O.binGd); %Available to SAMPLE FROM
+        nStm=numel(binIndPool); % 7008
+
+        if nStm > O.nIntrvlPerBin | O.bReplaceFlag
+            obj.unique_sel_sample(binIndPool,selBinBind,bReplace,false,M);
+            obj.mirror_sel_sample(M,selBinBind);
+            return
+        else
+            selBinInd=find(binIndPool);
+            obj.unique_sel_sample(binIndPool,selBinBind,bReplace,true,M);
+        end
+
+        binIndPool=find(ismember(O.binVals,bin) & O.binGd); %Available to SAMPLE FROM
+        if ~isempty(O.binValsExtra)
+            obj.sel_bin_warn_(bin,nStm,O,'extra');
+
+            n=size(O.binVals);
+            O.binVals=[nan(n); O.binValsExtra];
+            O.extraPref=[false(n); O.extraPref];
+            binGd=[false(n); O.binGdExtra] & ismember(O.binVals,O.binVals);
+
+            emptInd=obj.selInd==0 & selBinBind;
+
+            % Sample pref in extra
+            if any(O.extraPref)
+                binIndPool=find(binGd & O.extraPref);
+                obj.unique_sel_sample(binIndPool,selBinBind,bReplace,true,M);
+
+                % SHOULD == 0
+                % sum(obj.selInd(emptInd) < n(1))-sum(obj.selInd==0 & selBinBind)
+
+                emptInd=obj.selInd==0 & selBinBind;
+                if sum(emptInd)==0
+                    return
                 end
+            end
+
+            %TODO
+            %nSmpi=sum(O.extraPref);
+            %obj.sel_bin_warn(obj,bin,nSmpi,O,'pref');
+
+            % Sample non-pref in extra
+            binIndPool=find(binGd & ~O.extraPref);
+            obj.unique_sel_sample(binIndPool,selBinBind,bReplace,true,M);
+
+            % SHOULD == 0
+            %sum(obj.selInd(emptInd) < n(1))-sum(obj.selInd==0 & selBinBind)
+        else
+            TODO
+            dk
+            obj.sel_bin_warn_(nStm,O,'repeat');
+
+            % RESAMPLE REMAINDER
+            nIntrvlPerBin=O.nIntrvlPerBin-nStm;
+            obj.unique_sel_sample(binIndPool,selBinBind,Replace,true,M);
+        end
+        obj.mirror_sel_sample(M,selBinBind);
+    end
+    function sel_bin_warn_(obj,bin,nStm,O,moude)
+        N=O.nIntrvlPerBin-nStm;
+        switch moude
+        case 'extra'
+            str=sprintf('Using %d ''extra''',N);
+        case 'repeat'
+            str=sprintf('Repeating %s',N);
+        case 'repeat'
+            % TODO
+            str=sprintf('Repeating %s',N);
+        end
+        str=sprintf('%s stimuli for bin %d. %d avaliable stim, %d requested.',str,bin,nStm,O.nIntrvlPerBin);
+        Error.warnSoft(str);
+    end
+    function unique_sel_sample(obj,binInd,selBinBind,bReplace,bRepMode,M)
+        N=size(selBinBind);
+        %% mirror
+        indsMir=false(N);
+        %75000/3 modes /5 bins / 5stds
+        for i = 1:M.nUnqRep
+            ind=(M.uIndsRep==i) & (M.uIndsMir==1) & (M.uIndsPmir==1) & selBinBind & obj.selInd==0;
+            if sum(ind)==0
+                continue
+            end
+            if bRepMode && sum(ind) > numel(binInd)
+                K=numel(binInd);
+                I=find(ind);
+                I=I(1:K);
+                obj.selInd(I)=datasample(binInd,K,'Replace',bReplace);
+            else
                 obj.selInd(ind)=datasample(binInd,sum(ind),'Replace',bReplace);
             end
-
-            indsMir=uIndsMir & binBind;
-            for i = 2:nUnqMir
-                ind=(uIndsMir==i) & binBind;
-                obj.selInd(ind)=obj.selInd(indsMir);
-            end
-
-            for j = 1:nUnqRep
-                indsPmir=(uIndsRep==j) & (uIndsPmir==1) & binBind;
-                K=sum(indsPmir);
-                data=obj.selInd(indsPmir);
-                for i = 2:nUnqPmir
-                    ind=(uIndsRep==j) & (uIndsPmir==i) & binBind;
-                    obj.selInd(ind)=data(randperm(K));
-                end
-            end
-
         end
     end
+    function mirror_sel_sample(obj,M,selBinBind)
+        %% MIRROR
+
+        indsMir=M.uIndsMir & selBinBind;
+        for i = 2:M.nUnqMir
+            ind=(M.uIndsMir==i) & selBinBind;
+            obj.selInd(ind)=obj.selInd(indsMir);
+        end
+
+        for j = 1:M.nUnqRep
+            indsPmir=(M.uIndsRep==j) & (M.uIndsPmir==1) & selBinBind;
+            K=sum(indsPmir);
+            data=obj.selInd(indsPmir);
+            for i = 2:M.nUnqPmir
+                ind=(M.uIndsRep==j) & (M.uIndsPmir==i) & selBinBind & obj.selInd==0;
+                obj.selInd(ind)=data(randperm(K));
+                %obj.selInd(ind)=data;
+            end
+        end
+    end
+    function M=get_mirror_opts(obj,O,N)
+        M=struct();
+
+        %% REPEATS
+        if isempty(O.repeats)
+            M.nUnqRep=1;
+            M.uIndsRep=true(N);
+        else
+            col=obj.get_block_column(O.repeats);
+            [~,~,M.uIndsRep]=unique(col,'rows');
+            M.nUnqRep=(max(M.uIndsRep));
+        end
+
+        %% MIRROR
+        if isempty(O.mirror)
+            M.nUnqMir=1;
+            M.uIndsMir=true(N);
+        else
+            col=obj.get_block_column(O.mirror);
+            [u,~,M.uIndsMir]=unique(col,'rows');
+            M.nUnqMir=numel(u);
+        end
+
+
+        %% PSEUDO-MIRROR
+        if isempty(O.pmirror)
+            M.nUnqPmir=1;
+            M.uIndsPmir=true(N);
+        else
+            col=obj.get_block_column(O.pmirror);
+            [u,~,M.uIndsPmir]=unique(col,'rows');
+            M.nUnqPmir=numel(u);
+        end
+    end
+
 end
 methods(Static,Access=protected)
     function B=shuffle_within_rows_(A)
@@ -467,12 +662,25 @@ methods(Static,Access=protected)
         % across each dsp = 5000*5 = 25000 stim total
         % 75000 for all modes
         % 15000 each bin
-        table=distribute(1:nModes,1:nStd,1:nBlkPerDim,1:nTrlPerBlk,1:nIntrvlPerTrl); % 18000
+        table=Set.distribute(1:nModes,1:nStd,1:nBlkPerDim,1:nTrlPerBlk,1:nIntrvlPerTrl); % 18000
 
         rng(sd);
         cmpNum=Blk_con.get_cmp_num(nTrlPerBlk,nBlk,nIntrvlPerTrl);
 
+        N=size(cmpNum,1);
+
+        %if strcmp(flatAnchor,'B')
+        %    flt=double(mod(table(:,4),2)==0)+1;
+        %elseif isempty(flatAnchor)
+        %    flt=zeros(N,1);
+        %elseif flatAnchor=='L'
+        %    flt=ones(N,1);
+        %elseif flatAnchor=='R'
+        %    flt=ones(N,1)+1;
+        %end
+
         table=[table cmpNum];
+
         key={'mode','lvlInd','blk','trl','intrvl','cmpNum'};
     end
     function c=get_cmpSubs(nCmpPerDim,nTrlPerBlk,nBlk,nIntrvlPerTrl)
@@ -487,7 +695,7 @@ methods(Static,Access=protected)
             c=transpose(Blk_con.shuffle_within_rows_(c));
             c=c(:);
             counts=hist(c(1:nTrlPerBlk),unique(c(1:nTrlPerBlk)));
-            if ~isuniform(counts)
+            if ~Set.isUniform(counts)
                 error('something bad happend');
             end
             c=repelem(c,nIntrvlPerTrl,1);
@@ -504,10 +712,22 @@ end
 methods(Static)
     function opts=parse_ptchsOpts(opts)
         % XXX TODO fill in missing params if not exist
-        %opts=parse([],Opts,P);
+        %opts=Parse.parse([],Opts,P);
 
         P=Blk_con.get_ptchs_parseOpts();
         flds=P(:,1);
+
+
+        if isfield(opts,'std') && isfield(opts,'cmp')
+            if ~iscell(opts.dims)
+                dim=opts.dims;
+            else
+                dim=opts.dims{1};
+            end
+            opts.(dim)=num2cell(permute([opts.std opts.cmp],[3,1,2]));
+            opts=rmfield(opts,'std');
+            opts=rmfield(opts,'cmp');
+        end
 
         opts=parse_inds_fun(opts,P);
 
@@ -555,6 +775,8 @@ methods(Static)
                    ;
             elseif ~ischar(val) && sz(1) == 1 && sz(2) > 1
                 val=transpose(val);
+            elseif ~ischar(val) && ismember(fld,{'std','cmp'})
+                   ;
             elseif ~ischar(val)
                 error([ fld ' second dimension must be size 1']);
             end
@@ -571,6 +793,7 @@ methods(Static)
 
     function [table,key,nRow,nCol,nAisle, stdRC,cmpRC]=get_opts_tables(opts)
         P=Blk_con.get_ptchs_parseOpts();
+        P(ismember(P(:,1),{'std','cmp'}),:)=[];
         flds=P(:,1);
 
         [nRow,nCol,nAisle]=get_dimensions_fun(opts,flds);
@@ -644,23 +867,23 @@ methods(Static)
 
         function [stdRC,cmpRC]=get_RC(nCol,nAisle)
         %std{:} cmp{:}
-            C=cellfun(@(x) 1:x, num2cell(nCol),UO,false);
+            C=cellfun(@(x) 1:x, num2cell(nCol),'UniformOutput',false);
             % every standard combination
 
-            A=cellfun(@(x) 1:x, num2cell(nAisle),UO,false);
+            A=cellfun(@(x) 1:x, num2cell(nAisle),'UniformOutput',false);
             % every cmp combination
             if numel(C) == 1
                 C=C{1};
             else
-                C=distribute(C{:});
+                C=Set.distribute(C{:});
             end
             if numel(A) == 1
                 A=A{1};
             else
-                A=distribute(A{:});
+                A=Set.distribute(A{:});
             end
 
-            RC=distribute(C,A);
+            RC=Set.distribute(C,A);
             % every combination of standard combinations and cmp combinations
 
             h=size(RC,2)/2;
@@ -693,24 +916,30 @@ methods(Static)
               ;'repeats',[],'' ...
               ;'mirror',[],'' ...
               ;'pmirror',[],'' ...
-              ;'modes',[],'isallint' ...
-              ;'nBlkPerDim',[],'isint' ...
-              ;'nTrlPerLvl',[],'isint' ...
-              ;'nIntrvlPerTrl',[],'isint' ...
-              ;'sd',[],'isint', ...
+              ;'modes',[],'Num.isInt_a' ...
+              ;'nBlkPerDim',[],'Num.isInt' ...
+              ;'nTrlPerLvl',[],'Num.isInt' ...
+              ;'nIntrvlPerTrl',[],'Num.isInt' ...
+              ;'sd',[],'Num.isInt', ...
           };
     end
     function P=get_ptchs_parseOpts()
         P={...
              'dims',{},'iscell_e' ...
             ;'linked',{},'iscell_e' ...
-            ;'disparity',[],'isallnum_e'  ... % 1
-            ;'speed',[],'isallnum_e'  ... % 1
-            ;'bins',[],'isallint_e' ...
+            ;'disparity',0,'Num.is_a_e'  ... % 1
+            ;'speed',[],'Num.is_a_e'  ... % 1
+            ;'bins',[],'Num.isInt_a_e' ...
+            ;'bDSP',0,'isbinary' ...
+            ;'bCorrectCtrXYZ',false,'isbinary' ...
+            ;'WszRCPixOffset',0,'Num.is_e'
+            ;'std',[],'' ...
+            ;'cmp',[],'' ...
             ...
             ;'rmsFix',[],'isallnum_e'  ... % 1
             ;'dcFix',[],'isallnum_e'  ... % 1
             ;'dnkFix',[],'isallnum_e'  ... % 1
+            ;'flatAnchor','','Str.Alph.isLorRorB_e' ...
             ...
             ;'trgtDispOrWin','disp',''  ... %1, 'disp' 'win'
             ;'trgtPosXYZm',[0 0 0],'isallnum_e'  ...   % 3
@@ -723,18 +952,51 @@ methods(Static)
             ...
             ;'wdwType',[],'ischar'  ...   %1
             ;'wdwPszRCT',[],''  ...   % 2-3 OR char
-            ;'wdwPszRCT',[],''  ...   % 2-3 OR char
             ;'wdwRmpDm',[],''  ...    % 1-3
             ;'wdwDskDm',[],''  ...    % 1-3
             ;'wdwSymInd',[],''  ...   % 1-3
              ...
             ;'duration',[],''  ...   % 1-3
-
+            ...
+            ;'primaryXYZ','d','ischar_e' ...
+            ;'bXYZDisplay',false,'isbinary' ...
+            ;'bXYZSource',false,'isbinary' ...
+            ;'bXYZTransform',false,'isbinary' ...
+            ;'primaryPht','d','ischar_e' ...
+            ...
+            ;'bPhtTransform',false,'isbinary' ...
+            ;'bPhtSource',false,'isbinary' ...
           };
+    end
+    function name=ptchOpts_struct_names_to_blk_names(names)
+        if numel(names) == 2 && startsWith(names{1},'win')
+            name=names{2};
+            name(1)=Str.Alph.Upper(name(1));
+            name=['stm' name];
+            name=strrep(name,'Raw',''); % NOTE
+        elseif numel(names) == 2 && startsWith(names{1},'trgt') && strcmp(names{2},'trgtDsp');
+            name='disparity';
+        elseif numel(names) == 2 && startsWith(names{1},'trgt')
+            name=names{2};
+            name(1)=Str.Alph.Upper(name(1));
+            name=['trgt' name];
+        elseif numel(names) == 2 && startsWith('foc')
+            name=names{2};
+            name(1)=Str.Alph.Upper(name(1));
+            name=['foc' name];
+        elseif numel(names) == 2 && startsWith('wdw')
+            name=names{2};
+            name(1)=Str.Alph.Upper(name(1));
+            name=['wdw' name];
+
+        else
+            name=name{1};
+        end
     end
     function out=parse_blkOpts(Opts)
         P=Blk_con.get_blk_parseOpts();
-        out=parse([],Opts,P);
+
+        out=Args.parse([],P,Opts);
     end
     function [nIntrvlPerBin,nIntrvlAll]=get_nIntrvlPerBin(nBins,nModes,nLvlPerDim,nCmpPerDim,nBlkPerDim,nTrlPerLvl,nIntrvlPerTrl)
         nStd=prod(nLvlPerDim);

@@ -6,15 +6,25 @@ methods(Static)
         lookup=Blk.make_lookup_struct(BC);
         [t,dims]=Blk.lookup_to_tables(lookup);
     end
-    function lookup = make_lookup_struct(BC)
+    function lookup = make_lookup_struct(obj)
         lookup=struct;
-        lookup.dims=BC.dims;
-        lookup.cnd=BC.cndLookup;
-        lookup.cndKey=BC.cndKey;
-        lookup.lvl=BC.lvlLookup;
-        lookup.lvlKey=BC.lvlKey;
-        lookup.cmp=BC.cmpLookup;
-        lookup.cmpKey=BC.cmpKey;
+        if isa(obj,'Blk_con')
+            lookup.dims=obj.dims;
+            lookup.cnd=obj.cndLookup;
+            lookup.cndKey=obj.cndKey;
+            lookup.lvl=obj.lvlLookup;
+            lookup.lvlKey=obj.lvlKey;
+            lookup.cmp=obj.cmpLookup;
+            lookup.cmpKey=obj.cmpKey;
+        else
+            lookup.dims=obj.dims;
+            lookup.cnd=obj.lookup.cnd.TABLE;
+            lookup.cndKey=obj.lookup.cnd.KEY;
+            lookup.lvl=obj.lookup.lvl.TABLE;
+            lookup.lvlKey=obj.lookup.lvl.KEY;
+            lookup.cmp=obj.lookup.cmp.TABLE;
+            lookup.cmpKey=obj.lookup.cmp.KEY;
+        end
     end
     function [new,dims]=lookup_to_tables(lookup)
         new=struct();
@@ -24,39 +34,49 @@ methods(Static)
         dims=lookup.dims;
     end
     % LOAD
-    function t=load_blk(alias)
-        dire=Blk.get_dir(alias);
+    function [t,newInd]=load_blk(alias)
+        dire=Blk.getDir(alias);
         fname=[dire 'blk.mat'];
         S=load(fname);
-        t=Table(S.table,S.key);
+        types=repmat({'double'}, 1,length(S.key));
+        t=Table(S.table,S.key,types);
+        if isfield(S,'newInd')
+            newInd=S.newInd;
+        else
+            newInd=[];
+        end
     end
     function t=load_opts(alias)
         S=Blk.load_opts_raw(alias);
         t=Table(S.table,S.key);
     end
     function [t,dims]=load_lookup(alias)
-        dire=Blk.get_dir(alias);
+        dire=Blk.getDir(alias);
         S=load([dire 'lookup.mat']);
         dims=S.lookup.dims;
         t=Blk.lookup_to_tables(S.lookup);
     end
     function opts=load_opts_raw(alias)
-        dire=Blk.get_dir(alias);
+        dire=Blk.getDir(alias);
         opts=load([dire 'opts.mat']);
     end
     % DIR
-    function dire=get_dir(alias)
-        dire=[dbDirs('blk') alias filesep];
+    function dire=getDir(alias)
+        rt=Env.var('root');
+        if isempty(rt)
+            rt=Env.var('BLK__ROOT');
+        end
+        dire=[rt alias filesep];
     end
     % FNAME
     function fname=get_opts_table_fname(alias)
-        fname=[Blk.get_dire(alias) 'opts'];
+        fname=[Blk.getDir(alias) 'opts'];
     end
     function fname=get_blk_table_fname(alias)
-        fname=[Blk.get_dire(alias) 'blk'];
+        fname=[Blk.getDir(alias) 'blk'];
     end
     function fname=get_lvlInd_table_fname(alias)
-        fname=[Blk.get_dire(alias) 'table'];
+        fname=[Blk.getDir(alias) 'table'];
     end
 end
 end
